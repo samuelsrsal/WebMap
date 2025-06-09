@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8">
+  <title>Criminalidade na Zona Oeste do Rio de Janeiro por Circunscrição Integrada de Segurança Pública (2010-2019)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <style>
+    html, body { height: 100%; margin: 0; padding: 0; width: 100vw; }
+    #titulo {
+      position: absolute;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 1000;
+      background: rgba(255,255,255,0.9);
+      padding: 10px 30px;
+      border-radius: 8px;
+      font-size: 1.5em;
+      font-family: Arial, sans-serif;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      text-align: center;
+      width: auto;
+      max-width: 90vw;
+    }
+    #map { height: 100vh; width: 100vw; }
+    .legend {
+      background: white;
+      padding: 10px;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      font-size: 14px;
+      line-height: 18px;
+      color: #333;
+    }
+    .legend i {
+      width: 18px;
+      height: 18px;
+      float: left;
+      margin-right: 8px;
+      opacity: 0.7;
+    }
+    #camada-selector {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      z-index: 1001;
+      background: rgba(255,255,255,0.95);
+      padding: 10px 18px;
+      border-radius: 8px;
+      font-size: 1em;
+      font-family: Arial, sans-serif;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      min-width: 200px;
+    }
+    #camada-selector label {
+      display: block;
+      margin-bottom: 6px;
+      cursor: pointer;
+    }
+    .custom-popup { pointer-events: none; }
+  </style>
+</head>
+<body>
+  <div id="titulo">Criminalidade na Zona Oeste do Rio de Janeiro por Circunscrição Integrada de Segurança Pública (2010-2019)</div>
+  <div id="camada-selector">
+    <label><input type="radio" name="camada" value="registro" checked> Registro de Ocorrências</label>
+    <label><input type="radio" name="camada" value="roubo"> Roubo a Transeunte</label>
+    <label><input type="radio" name="camada" value="lesao"> Lesão Corporal Dolosa</label>
+  </div>
+  <div id="map"></div>
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script>
+    var map = L.map('map', { zoomControl: true }).setView([-23.05, -43.5], 10);
+
+    var osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '© OpenStreetMap'
+    });
+    var esri = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+      maxZoom: 19,
+      attribution: '© Esri'
+    });
+    var cartoDark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      maxZoom: 19,
+      attribution: '© CartoDB'
+    });
+    var baseMaps = {
+      "OpenStreetMap": osm,
+      "Satélite": esri,
+      "CartoDB Black": cartoDark
+    };
+    cartoDark.addTo(map);
+    var baseMapControl = L.control.layers(baseMaps, null, {collapsed: false, position: 'topleft'}).addTo(map);
+
+    function getColor(d, breaks) {
+      return d > breaks[4] ? '#800026' :
+             d > breaks[3] ? '#BD0026' :
+             d > breaks[2] ? '#E31A1C' :
+             d > breaks[1] ? '#FC4E2A' :
+             d > breaks[0] ? '#FD8D3C' : '#FEB24C';
+    }
+
+    var nomesCISP = {
+      16: '16ª CISP - Barra da tijuca',
+      28: '28ª CISP - Campinho',
+      32: '32ª CISP - Taquara',
+      33: '33ª CISP - Realengo',
+      34: '34ª CISP - Bangu',
+      35: '35ª CISP - Campo Grande',
+      36: '36ª CISP - Santa Cruz',
+      41: '41ª CISP - Tanque',
+      42: '42ª CISP - Recreio dos Bandeirantes',
+      43: '43ª CISP - Guaratiba'
+    };
+
+    Promise.all([
+      fetch('cisp_wgs84.geojson').then(r => r.json()),
+      fetch('dados.geojson').then(r => r.json())
+    ]).then(function([cispData, dadosData]) {
+      var registroO = {}, rouboTran = {}, lesaoCo1 = {};
+      dadosData.features.forEach(function(f) {
+        if (f.properties && f.properties.cisp != null) {
+          registroO[f.properties.cisp] = f.properties.registro_o;
+          rouboTran[f.properties.cisp] = f.properties.roubo_tran;
+          lesaoCo1[f.properties.cisp] = f.properties.lesao_co_1;
+        }
+      });
+      function getBreaks(obj) {
+        var valores = Object.values(obj).filter(v => typeof v === 'number');
+        var min = Math.min.apply(null, valores);
+        var max = Math.max.apply(null, valores);
+        return [
+          min,
+          min + (max-min)/5,
+          min + 2*(max-min)/5,
+          min + 3*(max-min)/5,
+          min + 4*(max-min)/5,
+          max
+        ];
+      }
+      var breaksRegistro = getBreaks(registroO);
+      var breaksRoubo = getBreaks(rouboTran);
+      var breaksLesao = getBreaks(lesaoCo1);
+
+      function highlightFeature(e) {
+        var layer = e.target;
+        layer.setStyle({ weight: 4, color: '#111', fillOpacity: 0.9 });
+        if (!L.Browser.ie && !L.Browser.opera && !L.Browser.edge) {
+          layer.bringToFront();
+        }
+      }
+      function resetHighlight(e, styleFunc) {
+        var layer = e.target;
+        layer.setStyle(styleFunc(layer.feature));
+      }
+      var hoverPopup = L.popup({ closeButton: false, autoPan: false, className: 'custom-popup' });
+
+      function onEachFeatureFactory(tipo, valores, breaks) {
+        return function(feature, layer) {
+          var cispNum = feature.properties.cisp;
+          var nome = typeof nomesCISP !== 'undefined' && nomesCISP[cispNum] ? nomesCISP[cispNum] : ('CISP: ' + cispNum);
+          var valor = valores[cispNum];
+          var indicador = tipo === 'registro'
+            ? 'Registro de Ocorrências'
+            : tipo === 'roubo'
+            ? 'Roubo a Transeunte'
+            : 'Lesão Corporal Dolosa';
+          var popupContent = '<b>' + nome + '</b><br>' +
+            '<span>' + indicador + ': <b>' + (valor !== undefined ? valor : 'N/A') + '</b></span>';
+          layer.on({
+            mouseover: function(e) {
+              highlightFeature(e);
+              hoverPopup.setLatLng(e.latlng).setContent(popupContent).openOn(map);
+            },
+            mouseout: function(e) {
+              resetHighlight(e, tipo === 'registro' ? styleRegistro : tipo === 'roubo' ? styleRoubo : styleLesao);
+              map.closePopup(hoverPopup);
+            }
+          });
+        };
+      }
+      function styleRegistro(feature) {
+        var cispNum = feature.properties.cisp;
+        var valor = registroO[cispNum];
+        return {
+          color: '#333',
+          weight: 2,
+          fillOpacity: 0.7,
+          fillColor: getColor(valor, breaksRegistro)
+        };
+      }
+      function styleRoubo(feature) {
+        var cispNum = feature.properties.cisp;
+        var valor = rouboTran[cispNum];
+        return {
+          color: '#333',
+          weight: 2,
+          fillOpacity: 0.7,
+          fillColor: getColor(valor, breaksRoubo)
+        };
+      }
+      function styleLesao(feature) {
+        var cispNum = feature.properties.cisp;
+        var valor = lesaoCo1[cispNum];
+        return {
+          color: '#333',
+          weight: 2,
+          fillOpacity: 0.7,
+          fillColor: getColor(valor, breaksLesao)
+        };
+      }
+      var layerRegistro = L.geoJSON(cispData, {
+        style: styleRegistro,
+        onEachFeature: onEachFeatureFactory('registro', registroO, breaksRegistro)
+      });
+      var layerRoubo = L.geoJSON(cispData, {
+        style: styleRoubo,
+        onEachFeature: onEachFeatureFactory('roubo', rouboTran, breaksRoubo)
+      });
+      var layerLesao = L.geoJSON(cispData, {
+        style: styleLesao,
+        onEachFeature: onEachFeatureFactory('lesao', lesaoCo1, breaksLesao)
+      });
+      layerRegistro.addTo(map);
+      map.fitBounds(layerRegistro.getBounds());
+
+      var legend = L.control({position: 'bottomright'});
+      function updateLegend(tipo) {
+        legend.remove();
+        if (tipo === 'registro') {
+          legend.onAdd = function (map) {
+            var div = L.DomUtil.create('div', 'legend'),
+                grades = breaksRegistro;
+            div.innerHTML += '<b>Registro de Ocorrências</b><br>';
+            for (var i = 0; i < grades.length-1; i++) {
+              div.innerHTML +=
+                '<i style="background:' + getColor(grades[i+1], breaksRegistro) + '"></i> ' +
+                Math.round(grades[i]) + (grades[i+1] ? '&ndash;' + Math.round(grades[i+1]) + '<br>' : '+');
+            }
+            return div;
+          };
+        } else if (tipo === 'roubo') {
+          legend.onAdd = function (map) {
+            var div = L.DomUtil.create('div', 'legend'),
+                grades = breaksRoubo;
+            div.innerHTML += '<b>Roubo a Transeunte</b><br>';
+            for (var i = 0; i < grades.length-1; i++) {
+              div.innerHTML +=
+                '<i style="background:' + getColor(grades[i+1], breaksRoubo) + '"></i> ' +
+                Math.round(grades[i]) + (grades[i+1] ? '&ndash;' + Math.round(grades[i+1]) + '<br>' : '+');
+            }
+            return div;
+          };
+        } else if (tipo === 'lesao') {
+          legend.onAdd = function (map) {
+            var div = L.DomUtil.create('div', 'legend'),
+                grades = breaksLesao;
+            div.innerHTML += '<b>Lesão Corporal Dolosa</b><br>';
+            for (var i = 0; i < grades.length-1; i++) {
+              div.innerHTML +=
+                '<i style="background:' + getColor(grades[i+1], breaksLesao) + '"></i> ' +
+                Math.round(grades[i]) + (grades[i+1] ? '&ndash;' + Math.round(grades[i+1]) + '<br>' : '+');
+            }
+            return div;
+          };
+        }
+        legend.addTo(map);
+      }
+      updateLegend('registro');
+
+      document.querySelectorAll('input[name="camada"]').forEach(function(radio) {
+        radio.addEventListener('change', function() {
+          if (this.value === 'registro') {
+            map.removeLayer(layerRoubo); map.removeLayer(layerLesao);
+            layerRegistro.addTo(map);
+            updateLegend('registro');
+            map.fitBounds(layerRegistro.getBounds());
+          } else if (this.value === 'roubo') {
+            map.removeLayer(layerRegistro); map.removeLayer(layerLesao);
+            layerRoubo.addTo(map);
+            updateLegend('roubo');
+            map.fitBounds(layerRoubo.getBounds());
+          } else if (this.value === 'lesao') {
+            map.removeLayer(layerRegistro); map.removeLayer(layerRoubo);
+            layerLesao.addTo(map);
+            updateLegend('lesao');
+            map.fitBounds(layerLesao.getBounds());
+          }
+        });
+      });
+    });
+  </script>
+</body>
+</html> 
